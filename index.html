@@ -53,7 +53,7 @@
         <span class="btn-icon">→</span> REJOINDRE
       </button>
 
-      <p class="home-version">v3.3 — PWA</p>
+      <p class="home-version">v3.4 — PWA</p>
     </div>
   </div>
 
@@ -77,6 +77,14 @@
           <rect x="13" y="13" width="9" height="9" rx="1"/>
         </svg>
       </button>
+      <button id="btn-rotate" class="hud-btn" title="Tourner la carte +45°">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transition:transform 0.3s">
+          <path d="M12 2L12 6"/>
+          <path d="M12 2L9 5M12 2L15 5"/>
+          <circle cx="12" cy="12" r="8" stroke-dasharray="3 3"/>
+          <path d="M20 12A8 8 0 0 0 12 4"/>
+        </svg>
+      </button>
       <button id="btn-team" class="hud-btn" title="Équipe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="9" cy="7" r="3"/>
@@ -91,7 +99,7 @@
           <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
         </svg>
       </button>
-      <button id="btn-locate" class="hud-btn" title="Me localiser">
+      <button id="btn-locate" class="hud-btn" title="Me localiser + nord">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="12" cy="12" r="3"/>
           <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>

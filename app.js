@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
-   AIRSOFT TRACKER — app.js v3.3
-   Pings permanents + rotation carte + sans header
+   AIRSOFT TRACKER — app.js v3.4
+   Bouton rotation + clic joueur recentre carte
 ═══════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -43,6 +43,10 @@ let myMarker       = null;
 let pingTempPos    = null;
 let pingModeActive = false;
 let _toastTimer    = null;
+let mapHeading     = 0; // angle rotation carte en degrés
+
+// ── Dernières positions connues des joueurs ─────────────────
+let playerPositions = {}; // { uid: { lat, lng, name } }
 
 // ══════════════════════════════════════════════════════════
 //  SÉCURITÉ
@@ -80,7 +84,7 @@ window.initMap = function () {
     mapTypeId:        'satellite',
     disableDefaultUI: true,
     gestureHandling:  'greedy',
-    rotateControl:    true,   // bouton rotation natif
+    heading:          0,
     tilt:             0,
   });
 
@@ -91,6 +95,26 @@ window.initMap = function () {
     }
   });
 };
+
+// ══════════════════════════════════════════════════════════
+//  ROTATION CARTE
+// ══════════════════════════════════════════════════════════
+function _rotateMap() {
+  if (!map) return;
+  mapHeading = (mapHeading + 45) % 360;
+  map.setHeading(mapHeading);
+
+  // Met à jour l'icône du bouton pour indiquer l'angle
+  const btn = document.getElementById('btn-rotate');
+  if (btn) {
+    const arrow = btn.querySelector('svg');
+    if (arrow) arrow.style.transform = `rotate(${mapHeading}deg)`;
+  }
+
+  if (mapHeading === 0) {
+    _toast('Nord ↑', 1000);
+  }
+}
 
 // ══════════════════════════════════════════════════════════
 //  MODE PING
@@ -124,7 +148,6 @@ function _showScreen(id) {
 
 function _showMap() {
   _showScreen('screen-map');
-  // Met à jour le panneau équipe avec le code
   document.getElementById('panel-code').textContent = STATE.gameCode;
   _startGPS();
   _subscribeToPlayers();
@@ -205,12 +228,18 @@ function _subscribeToPlayers() {
   unsubPlayers = _playersRef().onSnapshot((snapshot) => {
     Object.values(markers).forEach(m => m.setMap(null));
     markers = {};
+    playerPositions = {};
     const teamList = {};
 
     snapshot.forEach((doc) => {
       const player = doc.data();
       const uid    = doc.id;
       teamList[uid] = player;
+
+      // Stocke la position pour le clic dans le panneau
+      if (player.lat && player.lng && player.lat !== 0) {
+        playerPositions[uid] = { lat: player.lat, lng: player.lng, name: player.name };
+      }
 
       if (uid === STATE.uid) return;
       if (!player.lat || !player.lng || player.lat === 0) return;
@@ -335,8 +364,6 @@ function _addPing(comment) {
     createdAt:  firebase.firestore.FieldValue.serverTimestamp(),
   });
 
-  // Pas de suppression automatique — reste jusqu'à suppression manuelle
-
   _closePingDialog();
   _toast('Ping posé' + (comment ? ' — ' + comment.substring(0, 20) : ''));
 }
@@ -399,7 +426,7 @@ function _pingIcon() {
 }
 
 // ══════════════════════════════════════════════════════════
-//  ÉQUIPE
+//  ÉQUIPE — clic joueur recentre la carte
 // ══════════════════════════════════════════════════════════
 function _renderTeamPanel(players) {
   const list = document.getElementById('team-list');
@@ -420,23 +447,42 @@ function _renderTeamPanel(players) {
     const isMe      = uid === STATE.uid;
     const updatedAt = player.updatedAt ? player.updatedAt.toMillis() : 0;
     const isOffline = Date.now() - updatedAt > 60000;
+    const hasPos    = player.lat && player.lng && player.lat !== 0;
 
     const dotClass    = isOffline ? 'offline' : player.status === 'in_game' ? 'online-ingame' : 'online-out';
     const statusClass = isOffline ? 'offline' : player.status === 'in_game' ? 'ingame' : 'out';
     const statusLabel = isOffline ? 'HORS LIGNE' : player.status === 'in_game' ? 'EN JEU' : 'OUT';
 
-    const row    = document.createElement('div');
+    const row = document.createElement('div');
     row.className = 'team-player';
-    const dot    = document.createElement('div');
+    if (hasPos && !isMe) {
+      row.style.cursor = 'pointer';
+      row.title        = 'Centrer sur ' + player.name;
+      row.addEventListener('click', () => {
+        if (map && player.lat && player.lng) {
+          map.panTo({ lat: player.lat, lng: player.lng });
+          map.setZoom(18);
+          // Ferme le panneau pour voir la carte
+          document.getElementById('panel-team').classList.add('hidden');
+          document.getElementById('btn-team').classList.remove('active');
+          _toast('Centré sur ' + player.name, 1500);
+        }
+      });
+    }
+
+    const dot = document.createElement('div');
     dot.className = `team-player-dot ${dotClass}`;
-    const info   = document.createElement('div');
+
+    const info = document.createElement('div');
     info.className = 'team-player-info';
-    const name   = document.createElement('div');
+
+    const name = document.createElement('div');
     name.className   = 'team-player-name' + (isMe ? ' me' : '');
     name.textContent = player.name;
+
     const status = document.createElement('div');
     status.className   = `team-player-status ${statusClass}`;
-    status.textContent = statusLabel;
+    status.textContent = statusLabel + (hasPos && !isMe ? ' ◎' : '');
 
     info.appendChild(name);
     info.appendChild(status);
@@ -520,7 +566,9 @@ async function _leaveGame() {
     infoWindow.close();
     marker.setMap(null);
   });
-  pingMarkers = {};
+  pingMarkers    = {};
+  playerPositions = {};
+  mapHeading     = 0;
 
   STATE.myPosition = null;
   STATE.status     = 'in_game';
@@ -605,6 +653,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-satellite').classList.toggle('active', !isSat);
   });
 
+  document.getElementById('btn-rotate').addEventListener('click', _rotateMap);
+
   document.getElementById('btn-team').addEventListener('click', () => {
     document.getElementById('panel-team').classList.toggle('hidden');
     document.getElementById('btn-team').classList.toggle('active');
@@ -623,6 +673,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (STATE.myPosition && map) {
       map.panTo({ lat: STATE.myPosition.lat, lng: STATE.myPosition.lng });
       map.setZoom(17);
+      // Remet le nord
+      mapHeading = 0;
+      map.setHeading(0);
     } else {
       _toast('Position GPS non disponible');
     }
