@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
-   AIRSOFT TRACKER — app.js v3.1
-   Firebase Firestore temps réel — fix auth race condition
+   AIRSOFT TRACKER — app.js v3.3
+   Pings permanents + rotation carte + sans header
 ═══════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -80,6 +80,8 @@ window.initMap = function () {
     mapTypeId:        'satellite',
     disableDefaultUI: true,
     gestureHandling:  'greedy',
+    rotateControl:    true,   // bouton rotation natif
+    tilt:             0,
   });
 
   map.addListener('click', (e) => {
@@ -122,8 +124,7 @@ function _showScreen(id) {
 
 function _showMap() {
   _showScreen('screen-map');
-  document.getElementById('hud-pseudo').textContent = STATE.pseudo;
-  document.getElementById('hud-code').textContent   = 'CODE: ' + STATE.gameCode;
+  // Met à jour le panneau équipe avec le code
   document.getElementById('panel-code').textContent = STATE.gameCode;
   _startGPS();
   _subscribeToPlayers();
@@ -204,7 +205,6 @@ function _subscribeToPlayers() {
   unsubPlayers = _playersRef().onSnapshot((snapshot) => {
     Object.values(markers).forEach(m => m.setMap(null));
     markers = {};
-
     const teamList = {};
 
     snapshot.forEach((doc) => {
@@ -233,7 +233,7 @@ function _subscribeToPlayers() {
     _renderTeamPanel(teamList);
   }, (err) => {
     console.error('Firestore players error:', err);
-    _toast('Erreur Firestore — vérifie les règles de sécurité');
+    _toast('Erreur Firestore: ' + err.message);
   });
 }
 
@@ -307,7 +307,7 @@ function _markerIcon(color, label) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  PINGS
+//  PINGS — permanents jusqu'à suppression manuelle
 // ══════════════════════════════════════════════════════════
 function _openPingDialog(latLng) {
   if (!latLng) return;
@@ -335,7 +335,8 @@ function _addPing(comment) {
     createdAt:  firebase.firestore.FieldValue.serverTimestamp(),
   });
 
-  setTimeout(() => _pingsRef().doc(id).delete().catch(() => {}), 30000);
+  // Pas de suppression automatique — reste jusqu'à suppression manuelle
+
   _closePingDialog();
   _toast('Ping posé' + (comment ? ' — ' + comment.substring(0, 20) : ''));
 }
@@ -360,7 +361,7 @@ function _renderPingMarker(id, ping) {
   content.appendChild(document.createElement('br'));
   const del = document.createElement('span');
   del.textContent   = '✕ Supprimer';
-  del.style.cssText = 'color:#aaa;font-size:10px;cursor:pointer';
+  del.style.cssText = 'color:#e74c3c;font-size:11px;cursor:pointer;font-weight:bold';
   del.addEventListener('click', () => _pingsRef().doc(id).delete().catch(() => {}));
   content.appendChild(del);
 
@@ -462,7 +463,7 @@ function _toggleStatus() {
 //  PARTIE
 // ══════════════════════════════════════════════════════════
 async function _createGame() {
-  if (!STATE.uid) { _toast('Connexion Firebase en cours, réessaie...'); return; }
+  if (!STATE.uid) { _toast('Connexion en cours, réessaie...'); return; }
   const pseudo = _sanitizePseudo(document.getElementById('input-pseudo').value.trim());
   if (!pseudo) { _toast('Entre un pseudo valide !'); return; }
 
@@ -479,12 +480,12 @@ async function _createGame() {
     _toast('Partie créée — CODE: ' + STATE.gameCode);
   } catch (err) {
     console.error('createGame error:', err);
-    _toast('Erreur création partie: ' + err.message);
+    _toast('Erreur: ' + err.message);
   }
 }
 
 async function _joinGame() {
-  if (!STATE.uid) { _toast('Connexion Firebase en cours, réessaie...'); return; }
+  if (!STATE.uid) { _toast('Connexion en cours, réessaie...'); return; }
   const pseudo = _sanitizePseudo(document.getElementById('input-pseudo').value.trim());
   const code   = document.getElementById('input-code').value.trim();
   if (!pseudo) { _toast('Entre un pseudo valide !'); return; }
@@ -561,21 +562,18 @@ function _toast(msg, duration = 2800) {
 // ══════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
 
-  // Désactive les boutons en attendant l'auth Firebase
   const btnCreate = document.getElementById('btn-create');
   const btnJoin   = document.getElementById('btn-join');
-  btnCreate.disabled = true;
-  btnJoin.disabled   = true;
+  btnCreate.disabled      = true;
+  btnJoin.disabled        = true;
   btnCreate.style.opacity = '0.5';
   btnJoin.style.opacity   = '0.5';
 
-  // Auth anonyme Firebase
   auth.signInAnonymously()
     .then((cred) => {
-      STATE.uid = cred.user.uid;
-      console.log('Firebase Auth OK — UID:', STATE.uid);
-      btnCreate.disabled = false;
-      btnJoin.disabled   = false;
+      STATE.uid               = cred.user.uid;
+      btnCreate.disabled      = false;
+      btnJoin.disabled        = false;
       btnCreate.style.opacity = '1';
       btnJoin.style.opacity   = '1';
     })
@@ -584,7 +582,6 @@ document.addEventListener('DOMContentLoaded', () => {
       _toast('Erreur Firebase: ' + err.message);
     });
 
-  // Accueil
   btnCreate.addEventListener('click', _createGame);
   btnJoin.addEventListener('click', _joinGame);
 
@@ -598,7 +595,6 @@ document.addEventListener('DOMContentLoaded', () => {
     e.target.value = e.target.value.replace(/\D/g, '').substring(0, 6);
   });
 
-  // Carte
   document.getElementById('btn-back').addEventListener('click', _leaveGame);
   document.getElementById('btn-status').addEventListener('click', _toggleStatus);
 
