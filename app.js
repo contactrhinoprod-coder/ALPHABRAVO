@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
-   AIRSOFT TRACKER — app.js v3.4
-   Bouton rotation + clic joueur recentre carte
+   AIRSOFT TRACKER — app.js v3.5
+   Rotation CSS + mode suivi toggle
 ═══════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -43,10 +43,10 @@ let myMarker       = null;
 let pingTempPos    = null;
 let pingModeActive = false;
 let _toastTimer    = null;
-let mapHeading     = 0; // angle rotation carte en degrés
 
-// ── Dernières positions connues des joueurs ─────────────────
-let playerPositions = {}; // { uid: { lat, lng, name } }
+// ── Mode suivi ──────────────────────────────────────────────
+let followMe   = false;  // La carte suit ma position seulement si true
+let mapRotation = 0;     // Rotation CSS en degrés
 
 // ══════════════════════════════════════════════════════════
 //  SÉCURITÉ
@@ -84,8 +84,14 @@ window.initMap = function () {
     mapTypeId:        'satellite',
     disableDefaultUI: true,
     gestureHandling:  'greedy',
-    heading:          0,
-    tilt:             0,
+  });
+
+  // Tout geste sur la carte désactive le suivi
+  map.addListener('dragstart', _disableFollow);
+  map.addListener('zoom_changed', () => {
+    // Zoom manuel désactive le suivi
+    if (!followMe) return;
+    // On laisse le zoom sans désactiver le suivi
   });
 
   map.addListener('click', (e) => {
@@ -97,23 +103,61 @@ window.initMap = function () {
 };
 
 // ══════════════════════════════════════════════════════════
-//  ROTATION CARTE
+//  MODE SUIVI
+// ══════════════════════════════════════════════════════════
+function _enableFollow() {
+  followMe = true;
+  const btn = document.getElementById('btn-locate');
+  if (btn) {
+    btn.classList.add('active');
+    btn.style.color       = '#2ecc71';
+    btn.style.borderColor = '#2ecc71';
+  }
+  // Centre immédiatement sur ma position
+  if (STATE.myPosition && map) {
+    map.panTo({ lat: STATE.myPosition.lat, lng: STATE.myPosition.lng });
+  }
+  _toast('Suivi activé', 1500);
+}
+
+function _disableFollow() {
+  if (!followMe) return;
+  followMe = false;
+  const btn = document.getElementById('btn-locate');
+  if (btn) {
+    btn.classList.remove('active');
+    btn.style.color       = '';
+    btn.style.borderColor = '';
+  }
+}
+
+function _toggleFollow() {
+  if (followMe) {
+    _disableFollow();
+    _toast('Suivi désactivé', 1500);
+  } else {
+    _enableFollow();
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  ROTATION CSS
 // ══════════════════════════════════════════════════════════
 function _rotateMap() {
-  if (!map) return;
-  mapHeading = (mapHeading + 45) % 360;
-  map.setHeading(mapHeading);
+  mapRotation = (mapRotation + 45) % 360;
+  const mapDiv = document.getElementById('map');
+  if (mapDiv) {
+    mapDiv.style.transition = 'transform 0.35s ease';
+    mapDiv.style.transform  = `rotate(${mapRotation}deg)`;
+  }
 
-  // Met à jour l'icône du bouton pour indiquer l'angle
   const btn = document.getElementById('btn-rotate');
   if (btn) {
-    const arrow = btn.querySelector('svg');
-    if (arrow) arrow.style.transform = `rotate(${mapHeading}deg)`;
+    const svg = btn.querySelector('svg');
+    if (svg) svg.style.transform = `rotate(${mapRotation}deg)`;
   }
 
-  if (mapHeading === 0) {
-    _toast('Nord ↑', 1000);
-  }
+  if (mapRotation === 0) _toast('Nord ↑', 1200);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -167,6 +211,11 @@ function _startGPS() {
       STATE.myPosition = { lat, lng, heading: heading || 0 };
       _updateMyMarker(lat, lng);
       _firestoreUpdatePosition(lat, lng);
+
+      // Suit ma position SEULEMENT si le mode suivi est actif
+      if (followMe && map) {
+        map.panTo({ lat, lng });
+      }
     },
     (err) => {
       const msgs = { 1: 'Permission GPS refusée', 2: 'Position indisponible', 3: 'Timeout GPS' };
@@ -228,18 +277,12 @@ function _subscribeToPlayers() {
   unsubPlayers = _playersRef().onSnapshot((snapshot) => {
     Object.values(markers).forEach(m => m.setMap(null));
     markers = {};
-    playerPositions = {};
     const teamList = {};
 
     snapshot.forEach((doc) => {
       const player = doc.data();
       const uid    = doc.id;
       teamList[uid] = player;
-
-      // Stocke la position pour le clic dans le panneau
-      if (player.lat && player.lng && player.lat !== 0) {
-        playerPositions[uid] = { lat: player.lat, lng: player.lng, name: player.name };
-      }
 
       if (uid === STATE.uid) return;
       if (!player.lat || !player.lng || player.lat === 0) return;
@@ -315,7 +358,6 @@ function _updateMyMarker(lat, lng) {
     myMarker.setPosition(pos);
     myMarker.setIcon(icon);
   }
-  map.panTo(pos);
 }
 
 function _markerIcon(color, label) {
@@ -455,18 +497,21 @@ function _renderTeamPanel(players) {
 
     const row = document.createElement('div');
     row.className = 'team-player';
+
+    // Clic joueur → centre sur lui sans activer le suivi
     if (hasPos && !isMe) {
       row.style.cursor = 'pointer';
-      row.title        = 'Centrer sur ' + player.name;
+      row.title        = 'Voir ' + player.name;
       row.addEventListener('click', () => {
-        if (map && player.lat && player.lng) {
+        _disableFollow(); // coupe le suivi automatique
+        if (map) {
           map.panTo({ lat: player.lat, lng: player.lng });
           map.setZoom(18);
-          // Ferme le panneau pour voir la carte
-          document.getElementById('panel-team').classList.add('hidden');
-          document.getElementById('btn-team').classList.remove('active');
-          _toast('Centré sur ' + player.name, 1500);
         }
+        // Ferme le panneau
+        document.getElementById('panel-team').classList.add('hidden');
+        document.getElementById('btn-team').classList.remove('active');
+        _toast('Vue sur ' + player.name, 1500);
       });
     }
 
@@ -553,6 +598,7 @@ async function _joinGame() {
 async function _leaveGame() {
   _stopGPS();
   _setPingMode(false);
+  _disableFollow();
 
   await _firestoreLeaveGame();
 
@@ -566,9 +612,12 @@ async function _leaveGame() {
     infoWindow.close();
     marker.setMap(null);
   });
-  pingMarkers    = {};
-  playerPositions = {};
-  mapHeading     = 0;
+  pingMarkers = {};
+
+  // Remet la rotation à 0
+  mapRotation = 0;
+  const mapDiv = document.getElementById('map');
+  if (mapDiv) mapDiv.style.transform = 'rotate(0deg)';
 
   STATE.myPosition = null;
   STATE.status     = 'in_game';
@@ -653,6 +702,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-satellite').classList.toggle('active', !isSat);
   });
 
+  // Rotation CSS +45° par appui
   document.getElementById('btn-rotate').addEventListener('click', _rotateMap);
 
   document.getElementById('btn-team').addEventListener('click', () => {
@@ -669,17 +719,8 @@ document.addEventListener('DOMContentLoaded', () => {
     _setPingMode(!pingModeActive);
   });
 
-  document.getElementById('btn-locate').addEventListener('click', () => {
-    if (STATE.myPosition && map) {
-      map.panTo({ lat: STATE.myPosition.lat, lng: STATE.myPosition.lng });
-      map.setZoom(17);
-      // Remet le nord
-      mapHeading = 0;
-      map.setHeading(0);
-    } else {
-      _toast('Position GPS non disponible');
-    }
-  });
+  // Bouton localiser = toggle suivi
+  document.getElementById('btn-locate').addEventListener('click', _toggleFollow);
 
   document.getElementById('btn-ping-cancel').addEventListener('click', _closePingDialog);
   document.getElementById('btn-ping-confirm').addEventListener('click', () => {

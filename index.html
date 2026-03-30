@@ -12,9 +12,6 @@
 </head>
 <body>
 
-  <!-- ═══════════════════════════════════════════ -->
-  <!--  ÉCRAN 1 — ACCUEIL                         -->
-  <!-- ═══════════════════════════════════════════ -->
   <div id="screen-home" class="screen active">
     <div class="home-bg"></div>
     <div class="home-container">
@@ -53,21 +50,16 @@
         <span class="btn-icon">→</span> REJOINDRE
       </button>
 
-      <p class="home-version">v3.4 — PWA</p>
+      <p class="home-version">v3.5 — PWA</p>
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════════ -->
-  <!--  ÉCRAN 2 — CARTE                           -->
-  <!-- ═══════════════════════════════════════════ -->
   <div id="screen-map" class="screen">
 
     <div id="map"></div>
 
-    <!-- Bouton retour — top gauche -->
     <button id="btn-back" class="hud-btn hud-top-left" title="Retour">‹</button>
 
-    <!-- Boutons droite -->
     <div class="hud-right">
       <button id="btn-satellite" class="hud-btn" title="Satellite / Plan">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -78,11 +70,10 @@
         </svg>
       </button>
       <button id="btn-rotate" class="hud-btn" title="Tourner la carte +45°">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transition:transform 0.3s">
-          <path d="M12 2L12 6"/>
-          <path d="M12 2L9 5M12 2L15 5"/>
-          <circle cx="12" cy="12" r="8" stroke-dasharray="3 3"/>
-          <path d="M20 12A8 8 0 0 0 12 4"/>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transition:transform 0.35s ease">
+          <path d="M12 2L12 6M12 2L9.5 4.5M12 2L14.5 4.5"/>
+          <path d="M20 12A8 8 0 0 0 4.93 7"/>
+          <path d="M4 6v4h4"/>
         </svg>
       </button>
       <button id="btn-team" class="hud-btn" title="Équipe">
@@ -99,7 +90,7 @@
           <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
         </svg>
       </button>
-      <button id="btn-locate" class="hud-btn" title="Me localiser + nord">
+      <button id="btn-locate" class="hud-btn" title="Suivre ma position (toggle)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="12" cy="12" r="3"/>
           <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
@@ -108,7 +99,6 @@
       </button>
     </div>
 
-    <!-- Panneau équipe gauche -->
     <div id="panel-team" class="panel-team hidden">
       <div class="panel-header">
         <span class="panel-title">ÉQUIPE</span>
@@ -118,7 +108,6 @@
       <div id="team-list" class="team-list"></div>
     </div>
 
-    <!-- Bouton statut bas centre -->
     <div class="hud-bottom">
       <button id="btn-status" class="btn-status in-game">
         <span id="status-dot" class="status-dot"></span>
@@ -126,7 +115,6 @@
       </button>
     </div>
 
-    <!-- Dialog ping -->
     <div id="dialog-ping" class="dialog hidden">
       <div class="dialog-box">
         <div class="dialog-title">📍 NOUVEAU PING</div>
@@ -140,14 +128,10 @@
 
   </div>
 
-  <!-- Firebase SDK (compat) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-
-  <!-- Google Maps SDK -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC8h2U0ufGQQddAPVsRerwVq_EzwZf14FI&callback=initMap" async defer></script>
-
   <script src="app.js"></script>
 </body>
 </html>
