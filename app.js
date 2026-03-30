@@ -1,10 +1,25 @@
 /* ═══════════════════════════════════════════════════════════
-   AIRSOFT TRACKER — app.js v2.2
-   Architecture prête pour Firebase
-   Ping via bouton dédié + clic carte
+   AIRSOFT TRACKER — app.js v3.0
+   Firebase Firestore temps réel
 ═══════════════════════════════════════════════════════════ */
 
 'use strict';
+
+// ══════════════════════════════════════════════════════════
+//  FIREBASE — Config
+// ══════════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey:            "AIzaSyDu0oZgJtHh_D4GVK03MDSn8hZ5PLl7knE",
+  authDomain:        "alphabravo-45d10.firebaseapp.com",
+  projectId:         "alphabravo-45d10",
+  storageBucket:     "alphabravo-45d10.firebasestorage.app",
+  messagingSenderId: "937873962977",
+  appId:             "1:937873962977:web:325c8e34162342e71944a0",
+};
+
+firebase.initializeApp(firebaseConfig);
+const db   = firebase.firestore();
+const auth = firebase.auth();
 
 // ── État global ────────────────────────────────────────────
 const STATE = {
@@ -12,11 +27,13 @@ const STATE = {
   gameCode:    '',
   status:      'in_game',
   myPosition:  null,
-  players:     {},
-  pings:       {},
   uid:         null,
   watchId:     null,
 };
+
+// ── Listeners Firestore à déconnecter ──────────────────────
+let unsubPlayers = null;
+let unsubPings   = null;
 
 // ── Références carte ────────────────────────────────────────
 let map           = null;
@@ -28,7 +45,7 @@ let pingModeActive = false;
 let _toastTimer   = null;
 
 // ══════════════════════════════════════════════════════════
-//  SÉCURITÉ — Échappement
+//  SÉCURITÉ
 // ══════════════════════════════════════════════════════════
 function _esc(str) {
   if (typeof str !== 'string') return '';
@@ -54,7 +71,7 @@ function _sanitizePseudo(str) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  GOOGLE MAPS — callback SDK
+//  GOOGLE MAPS
 // ══════════════════════════════════════════════════════════
 window.initMap = function () {
   map = new google.maps.Map(document.getElementById('map'), {
@@ -65,7 +82,6 @@ window.initMap = function () {
     gestureHandling:  'greedy',
   });
 
-  // Clic sur la carte — pose un ping si mode actif
   map.addListener('click', (e) => {
     if (pingModeActive && e.latLng) {
       _openPingDialog(e.latLng);
@@ -81,7 +97,6 @@ function _setPingMode(active) {
   pingModeActive = active;
   const btn    = document.getElementById('btn-ping-mode');
   const mapDiv = document.getElementById('map');
-
   if (active) {
     btn.classList.add('active');
     btn.style.borderColor = '#f39c12';
@@ -111,17 +126,15 @@ function _showMap() {
   document.getElementById('hud-code').textContent   = 'CODE: ' + STATE.gameCode;
   document.getElementById('panel-code').textContent = STATE.gameCode;
   _startGPS();
-  _renderTeamPanel();
+  _subscribeToPlayers();
+  _subscribeToPings();
 }
 
 // ══════════════════════════════════════════════════════════
 //  GPS
 // ══════════════════════════════════════════════════════════
 function _startGPS() {
-  if (!navigator.geolocation) {
-    _toast('GPS non disponible sur cet appareil');
-    return;
-  }
+  if (!navigator.geolocation) { _toast('GPS non disponible'); return; }
   if (STATE.watchId !== null) _stopGPS();
 
   STATE.watchId = navigator.geolocation.watchPosition(
@@ -129,20 +142,10 @@ function _startGPS() {
       const { latitude: lat, longitude: lng, heading } = pos.coords;
       STATE.myPosition = { lat, lng, heading: heading || 0 };
       _updateMyMarker(lat, lng);
-      _updatePlayer(STATE.uid, {
-        name:      STATE.pseudo,
-        status:    STATE.status,
-        lat, lng,
-        updatedAt: Date.now(),
-      });
-      // TODO Firebase: update position in Firestore
+      _firestoreUpdatePosition(lat, lng);
     },
     (err) => {
-      const msgs = {
-        1: 'Permission GPS refusée — active la localisation',
-        2: 'Position GPS indisponible',
-        3: 'Timeout GPS — réessaie',
-      };
+      const msgs = { 1: 'Permission GPS refusée', 2: 'Position indisponible', 3: 'Timeout GPS' };
       _toast(msgs[err.code] || 'Erreur GPS');
     },
     { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
@@ -154,6 +157,115 @@ function _stopGPS() {
     navigator.geolocation.clearWatch(STATE.watchId);
     STATE.watchId = null;
   }
+}
+
+// ══════════════════════════════════════════════════════════
+//  FIRESTORE — Joueurs
+// ══════════════════════════════════════════════════════════
+function _playersRef() {
+  return db.collection('games').doc(STATE.gameCode).collection('players');
+}
+
+function _pingsRef() {
+  return db.collection('games').doc(STATE.gameCode).collection('pings');
+}
+
+function _firestoreJoinGame() {
+  return _playersRef().doc(STATE.uid).set({
+    name:      STATE.pseudo,
+    status:    'in_game',
+    lat:       0,
+    lng:       0,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+function _firestoreUpdatePosition(lat, lng) {
+  _playersRef().doc(STATE.uid).update({
+    lat,
+    lng,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }).catch(() => {}); // ignore si doc pas encore créé
+}
+
+function _firestoreUpdateStatus(status) {
+  _playersRef().doc(STATE.uid).update({ status })
+    .catch(() => {});
+}
+
+function _firestoreLeaveGame() {
+  return _playersRef().doc(STATE.uid).delete().catch(() => {});
+}
+
+function _subscribeToPlayers() {
+  if (unsubPlayers) unsubPlayers();
+  unsubPlayers = _playersRef().onSnapshot((snapshot) => {
+    // Retire anciens marqueurs
+    Object.values(markers).forEach(m => m.setMap(null));
+    markers = {};
+
+    const teamList = {};
+
+    snapshot.forEach((doc) => {
+      const player = doc.data();
+      const uid    = doc.id;
+      teamList[uid] = player;
+
+      if (uid === STATE.uid) return; // mon marqueur est géré séparément
+      if (!player.lat || !player.lng || player.lat === 0) return;
+
+      const updatedAt = player.updatedAt ? player.updatedAt.toMillis() : 0;
+      const isOffline = Date.now() - updatedAt > 60000;
+      const color = isOffline ? '#555e55'
+        : player.status === 'in_game' ? '#3498db' : '#e74c3c';
+
+      if (map) {
+        markers[uid] = new google.maps.Marker({
+          position: { lat: player.lat, lng: player.lng },
+          map,
+          icon:  _markerIcon(color, player.name),
+          title: player.name,
+        });
+      }
+    });
+
+    _renderTeamPanel(teamList);
+  });
+}
+
+function _subscribeToPings() {
+  if (unsubPings) unsubPings();
+  unsubPings = _pingsRef().onSnapshot((snapshot) => {
+    // Retire les pings qui n'existent plus dans Firestore
+    const firestoreIds = new Set(snapshot.docs.map(d => d.id));
+
+    Object.keys(pingMarkers).forEach((id) => {
+      if (!firestoreIds.has(id)) {
+        pingMarkers[id].infoWindow.close();
+        pingMarkers[id].marker.setMap(null);
+        delete pingMarkers[id];
+      }
+    });
+
+    // Ajoute les nouveaux pings
+    snapshot.docChanges().forEach((change) => {
+      if (change.type === 'added') {
+        const ping = change.doc.data();
+        const id   = change.doc.id;
+        if (!pingMarkers[id]) {
+          _renderPingMarker(id, {
+            lat:        ping.lat,
+            lng:        ping.lng,
+            playerName: ping.playerName,
+            comment:    ping.comment || '',
+          });
+        }
+      }
+      if (change.type === 'removed') {
+        _removePingMarker(change.doc.id);
+      }
+    });
+  });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -171,24 +283,6 @@ function _updateMyMarker(lat, lng) {
     myMarker.setIcon(icon);
   }
   map.panTo(pos);
-}
-
-function _refreshPlayerMarkers() {
-  if (!map) return;
-  Object.values(markers).forEach(m => m.setMap(null));
-  markers = {};
-  Object.entries(STATE.players).forEach(([uid, player]) => {
-    if (uid === STATE.uid || !player.lat || !player.lng || player.lat === 0) return;
-    const isOffline = Date.now() - player.updatedAt > 60000;
-    const color = isOffline ? '#555e55'
-      : player.status === 'in_game' ? '#3498db' : '#e74c3c';
-    markers[uid] = new google.maps.Marker({
-      position: { lat: player.lat, lng: player.lng },
-      map,
-      icon:  _markerIcon(color, player.name),
-      title: player.name,
-    });
-  });
 }
 
 function _markerIcon(color, label) {
@@ -227,20 +321,21 @@ function _closePingDialog() {
 function _addPing(comment) {
   if (!pingTempPos) return;
   const safeComment = _esc(String(comment || '').substring(0, 60));
-  const id   = Date.now().toString();
-  const ping = {
+  const id = Date.now().toString();
+
+  _pingsRef().doc(id).set({
     lat:        pingTempPos.lat(),
     lng:        pingTempPos.lng(),
     playerName: STATE.pseudo,
     comment:    safeComment,
-    createdAt:  Date.now(),
-  };
-  STATE.pings[id] = ping;
-  _renderPingMarker(id, ping);
-  setTimeout(() => _removePing(id), 30000);
+    createdAt:  firebase.firestore.FieldValue.serverTimestamp(),
+  });
+
+  // Auto-suppression après 30s
+  setTimeout(() => _pingsRef().doc(id).delete().catch(() => {}), 30000);
+
   _closePingDialog();
   _toast('Ping posé' + (comment ? ' — ' + comment.substring(0, 20) : ''));
-  // TODO Firebase: add ping to Firestore
 }
 
 function _renderPingMarker(id, ping) {
@@ -265,7 +360,7 @@ function _renderPingMarker(id, ping) {
   const del = document.createElement('span');
   del.textContent   = '✕ Supprimer';
   del.style.cssText = 'color:#aaa;font-size:10px;cursor:pointer';
-  del.addEventListener('click', () => _removePing(id));
+  del.addEventListener('click', () => _pingsRef().doc(id).delete().catch(() => {}));
   content.appendChild(br2);
   content.appendChild(del);
 
@@ -281,14 +376,12 @@ function _renderPingMarker(id, ping) {
   pingMarkers[id] = { marker, infoWindow };
 }
 
-function _removePing(id) {
+function _removePingMarker(id) {
   if (pingMarkers[id]) {
     pingMarkers[id].infoWindow.close();
     pingMarkers[id].marker.setMap(null);
     delete pingMarkers[id];
   }
-  delete STATE.pings[id];
-  // TODO Firebase: delete ping from Firestore
 }
 
 function _pingIcon() {
@@ -307,20 +400,13 @@ function _pingIcon() {
 // ══════════════════════════════════════════════════════════
 //  ÉQUIPE
 // ══════════════════════════════════════════════════════════
-function _updatePlayer(uid, data) {
-  if (!uid) return;
-  STATE.players[uid] = { ...STATE.players[uid], ...data };
-  _renderTeamPanel();
-  _refreshPlayerMarkers();
-}
-
-function _renderTeamPanel() {
+function _renderTeamPanel(players) {
   const list = document.getElementById('team-list');
   if (!list) return;
 
   while (list.firstChild) list.removeChild(list.firstChild);
 
-  const uids = Object.keys(STATE.players);
+  const uids = Object.keys(players || {});
   if (uids.length === 0) {
     const empty = document.createElement('div');
     empty.style.cssText = 'padding:16px;color:var(--text-dim);font-size:11px;text-align:center';
@@ -330,9 +416,10 @@ function _renderTeamPanel() {
   }
 
   uids.forEach((uid) => {
-    const player    = STATE.players[uid];
+    const player    = players[uid];
     const isMe      = uid === STATE.uid;
-    const isOffline = Date.now() - player.updatedAt > 60000;
+    const updatedAt = player.updatedAt ? player.updatedAt.toMillis() : 0;
+    const isOffline = Date.now() - updatedAt > 60000;
 
     const dotClass    = isOffline ? 'offline' : player.status === 'in_game' ? 'online-ingame' : 'online-out';
     const statusClass = isOffline ? 'offline' : player.status === 'in_game' ? 'ingame' : 'out';
@@ -374,53 +461,53 @@ function _toggleStatus() {
   btn.className     = 'btn-status ' + (STATE.status === 'in_game' ? 'in-game' : 'out');
   label.textContent = STATE.status === 'in_game' ? 'EN JEU' : 'OUT';
 
-  if (STATE.players[STATE.uid]) {
-    STATE.players[STATE.uid].status    = STATE.status;
-    STATE.players[STATE.uid].updatedAt = Date.now();
-  }
-
-  _renderTeamPanel();
+  _firestoreUpdateStatus(STATE.status);
   if (STATE.myPosition) _updateMyMarker(STATE.myPosition.lat, STATE.myPosition.lng);
-  // TODO Firebase: update status in Firestore
 }
 
 // ══════════════════════════════════════════════════════════
 //  PARTIE
 // ══════════════════════════════════════════════════════════
-function _createGame() {
+async function _createGame() {
   const pseudo = _sanitizePseudo(document.getElementById('input-pseudo').value.trim());
   if (!pseudo) { _toast('Entre un pseudo valide !'); return; }
+
   STATE.pseudo   = pseudo;
   STATE.gameCode = _generateCode();
-  _joinGameState();
+
+  await db.collection('games').doc(STATE.gameCode).set({
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    active:    true,
+  });
+
+  await _firestoreJoinGame();
+  _showMap();
   _toast('Partie créée — CODE: ' + STATE.gameCode);
-  // TODO Firebase: create game in Firestore
 }
 
-function _joinGame() {
+async function _joinGame() {
   const pseudo = _sanitizePseudo(document.getElementById('input-pseudo').value.trim());
   const code   = document.getElementById('input-code').value.trim();
+
   if (!pseudo) { _toast('Entre un pseudo valide !'); return; }
   if (!/^\d{6}$/.test(code)) { _toast('Le code doit être 6 chiffres !'); return; }
+
   STATE.pseudo   = pseudo;
   STATE.gameCode = code;
-  _joinGameState();
-  _toast('Partie rejointe — CODE: ' + STATE.gameCode);
-  // TODO Firebase: join game in Firestore
-}
 
-function _joinGameState() {
-  STATE.status = 'in_game';
-  STATE.players[STATE.uid] = {
-    name: STATE.pseudo, status: 'in_game',
-    lat: 0, lng: 0, updatedAt: Date.now(),
-  };
+  await _firestoreJoinGame();
   _showMap();
+  _toast('Partie rejointe — CODE: ' + STATE.gameCode);
 }
 
-function _leaveGame() {
+async function _leaveGame() {
   _stopGPS();
   _setPingMode(false);
+
+  await _firestoreLeaveGame();
+
+  if (unsubPlayers) { unsubPlayers(); unsubPlayers = null; }
+  if (unsubPings)   { unsubPings();   unsubPings   = null; }
 
   if (myMarker) { myMarker.setMap(null); myMarker = null; }
   Object.values(markers).forEach(m => m.setMap(null));
@@ -431,8 +518,6 @@ function _leaveGame() {
   });
   pingMarkers = {};
 
-  STATE.players    = {};
-  STATE.pings      = {};
   STATE.myPosition = null;
   STATE.status     = 'in_game';
 
@@ -444,17 +529,12 @@ function _leaveGame() {
   document.getElementById('panel-team')?.classList.add('hidden');
   document.getElementById('btn-team')?.classList.remove('active');
 
-  // TODO Firebase: cleanup Firestore listeners
   _showScreen('screen-home');
 }
 
 // ══════════════════════════════════════════════════════════
 //  UTILITAIRES
 // ══════════════════════════════════════════════════════════
-function _generateUID() {
-  return 'uid_' + Math.random().toString(36).substring(2, 11);
-}
-
 function _generateCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -473,10 +553,17 @@ function _toast(msg, duration = 2800) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  ÉVÉNEMENTS
+//  INIT — Auth anonyme puis événements
 // ══════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
-  STATE.uid = _generateUID();
+
+  // Connexion anonyme Firebase
+  auth.signInAnonymously().then((cred) => {
+    STATE.uid = cred.user.uid;
+  }).catch((err) => {
+    console.error('Auth error:', err);
+    _toast('Erreur de connexion Firebase');
+  });
 
   // Accueil
   document.getElementById('btn-create').addEventListener('click', _createGame);
@@ -513,6 +600,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-team').classList.remove('active');
   });
 
+  document.getElementById('btn-ping-mode').addEventListener('click', () => {
+    _setPingMode(!pingModeActive);
+  });
+
   document.getElementById('btn-locate').addEventListener('click', () => {
     if (STATE.myPosition && map) {
       map.panTo({ lat: STATE.myPosition.lat, lng: STATE.myPosition.lng });
@@ -520,11 +611,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       _toast('Position GPS non disponible');
     }
-  });
-
-  // Bouton mode ping
-  document.getElementById('btn-ping-mode').addEventListener('click', () => {
-    _setPingMode(!pingModeActive);
   });
 
   // Dialog ping

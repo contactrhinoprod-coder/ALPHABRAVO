@@ -62,22 +62,16 @@
   <!-- ═══════════════════════════════════════════ -->
   <div id="screen-map" class="screen">
 
-    <!-- Carte Google Maps -->
     <div id="map"></div>
 
-    <!-- HUD top gauche — retour -->
-    <button id="btn-back" class="hud-btn hud-top-left" title="Retour">
-      ‹
-    </button>
+    <button id="btn-back" class="hud-btn hud-top-left" title="Retour">‹</button>
 
-    <!-- HUD top centre — info partie -->
     <div id="hud-info" class="hud-info">
       <span id="hud-pseudo">—</span>
       <span class="hud-separator">|</span>
       <span id="hud-code">CODE: ——</span>
     </div>
 
-    <!-- HUD droite — contrôles -->
     <div class="hud-right">
       <button id="btn-satellite" class="hud-btn" title="Satellite / Plan">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -94,15 +88,13 @@
           <path d="M16 3.13a4 4 0 010 7.75"/>
           <path d="M21 21v-2a4 4 0 00-3-3.87"/>
         </svg>
- </button>
-<button id="btn-ping-mode" class="hud-btn" title="Mode ping">
+      </button>
+      <button id="btn-ping-mode" class="hud-btn" title="Poser un ping">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="12" cy="10" r="3"/>
           <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
         </svg>
       </button>
-        
-     
       <button id="btn-locate" class="hud-btn" title="Me localiser">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="12" cy="12" r="3"/>
@@ -112,19 +104,15 @@
       </button>
     </div>
 
-    <!-- Panneau équipe (latéral gauche) -->
     <div id="panel-team" class="panel-team hidden">
       <div class="panel-header">
         <span class="panel-title">ÉQUIPE</span>
         <span id="panel-code" class="panel-code">—</span>
         <button id="btn-close-panel" class="panel-close">✕</button>
       </div>
-      <div id="team-list" class="team-list">
-        <!-- Joueurs injectés dynamiquement -->
-      </div>
+      <div id="team-list" class="team-list"></div>
     </div>
 
-    <!-- Bouton statut — bas centre -->
     <div class="hud-bottom">
       <button id="btn-status" class="btn-status in-game">
         <span id="status-dot" class="status-dot"></span>
@@ -132,7 +120,6 @@
       </button>
     </div>
 
-    <!-- Dialog ping -->
     <div id="dialog-ping" class="dialog hidden">
       <div class="dialog-box">
         <div class="dialog-title">📍 NOUVEAU PING</div>
@@ -146,13 +133,14 @@
 
   </div>
 
-<!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-  
+  <!-- Firebase SDK (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+
   <!-- Google Maps SDK -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC8h2U0ufGQQddAPVsRerwVq_EzwZf14FI&callback=initMap" async defer></script>
+
   <script src="app.js"></script>
 </body>
 </html>
