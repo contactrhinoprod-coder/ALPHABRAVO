@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
-   AIRSOFT TRACKER — app.js v3.0
-   Firebase Firestore temps réel
+   AIRSOFT TRACKER — app.js v3.1
+   Firebase Firestore temps réel — fix auth race condition
 ═══════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -23,26 +23,26 @@ const auth = firebase.auth();
 
 // ── État global ────────────────────────────────────────────
 const STATE = {
-  pseudo:      '',
-  gameCode:    '',
-  status:      'in_game',
-  myPosition:  null,
-  uid:         null,
-  watchId:     null,
+  pseudo:     '',
+  gameCode:   '',
+  status:     'in_game',
+  myPosition: null,
+  uid:        null,
+  watchId:    null,
 };
 
-// ── Listeners Firestore à déconnecter ──────────────────────
+// ── Listeners Firestore ─────────────────────────────────────
 let unsubPlayers = null;
 let unsubPings   = null;
 
 // ── Références carte ────────────────────────────────────────
-let map           = null;
-let markers       = {};
-let pingMarkers   = {};
-let myMarker      = null;
-let pingTempPos   = null;
+let map            = null;
+let markers        = {};
+let pingMarkers    = {};
+let myMarker       = null;
+let pingTempPos    = null;
 let pingModeActive = false;
-let _toastTimer   = null;
+let _toastTimer    = null;
 
 // ══════════════════════════════════════════════════════════
 //  SÉCURITÉ
@@ -160,7 +160,7 @@ function _stopGPS() {
 }
 
 // ══════════════════════════════════════════════════════════
-//  FIRESTORE — Joueurs
+//  FIRESTORE
 // ══════════════════════════════════════════════════════════
 function _playersRef() {
   return db.collection('games').doc(STATE.gameCode).collection('players');
@@ -181,26 +181,27 @@ function _firestoreJoinGame() {
 }
 
 function _firestoreUpdatePosition(lat, lng) {
+  if (!STATE.uid || !STATE.gameCode) return;
   _playersRef().doc(STATE.uid).update({
     lat,
     lng,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-  }).catch(() => {}); // ignore si doc pas encore créé
+  }).catch(() => {});
 }
 
 function _firestoreUpdateStatus(status) {
-  _playersRef().doc(STATE.uid).update({ status })
-    .catch(() => {});
+  if (!STATE.uid || !STATE.gameCode) return;
+  _playersRef().doc(STATE.uid).update({ status }).catch(() => {});
 }
 
 function _firestoreLeaveGame() {
+  if (!STATE.uid || !STATE.gameCode) return Promise.resolve();
   return _playersRef().doc(STATE.uid).delete().catch(() => {});
 }
 
 function _subscribeToPlayers() {
   if (unsubPlayers) unsubPlayers();
   unsubPlayers = _playersRef().onSnapshot((snapshot) => {
-    // Retire anciens marqueurs
     Object.values(markers).forEach(m => m.setMap(null));
     markers = {};
 
@@ -211,12 +212,12 @@ function _subscribeToPlayers() {
       const uid    = doc.id;
       teamList[uid] = player;
 
-      if (uid === STATE.uid) return; // mon marqueur est géré séparément
+      if (uid === STATE.uid) return;
       if (!player.lat || !player.lng || player.lat === 0) return;
 
       const updatedAt = player.updatedAt ? player.updatedAt.toMillis() : 0;
       const isOffline = Date.now() - updatedAt > 60000;
-      const color = isOffline ? '#555e55'
+      const color     = isOffline ? '#555e55'
         : player.status === 'in_game' ? '#3498db' : '#e74c3c';
 
       if (map) {
@@ -230,13 +231,15 @@ function _subscribeToPlayers() {
     });
 
     _renderTeamPanel(teamList);
+  }, (err) => {
+    console.error('Firestore players error:', err);
+    _toast('Erreur Firestore — vérifie les règles de sécurité');
   });
 }
 
 function _subscribeToPings() {
   if (unsubPings) unsubPings();
   unsubPings = _pingsRef().onSnapshot((snapshot) => {
-    // Retire les pings qui n'existent plus dans Firestore
     const firestoreIds = new Set(snapshot.docs.map(d => d.id));
 
     Object.keys(pingMarkers).forEach((id) => {
@@ -247,7 +250,6 @@ function _subscribeToPings() {
       }
     });
 
-    // Ajoute les nouveaux pings
     snapshot.docChanges().forEach((change) => {
       if (change.type === 'added') {
         const ping = change.doc.data();
@@ -265,6 +267,8 @@ function _subscribeToPings() {
         _removePingMarker(change.doc.id);
       }
     });
+  }, (err) => {
+    console.error('Firestore pings error:', err);
   });
 }
 
@@ -331,9 +335,7 @@ function _addPing(comment) {
     createdAt:  firebase.firestore.FieldValue.serverTimestamp(),
   });
 
-  // Auto-suppression après 30s
   setTimeout(() => _pingsRef().doc(id).delete().catch(() => {}), 30000);
-
   _closePingDialog();
   _toast('Ping posé' + (comment ? ' — ' + comment.substring(0, 20) : ''));
 }
@@ -349,19 +351,17 @@ function _renderPingMarker(id, ping) {
   content.appendChild(title);
 
   if (ping.comment) {
-    const br  = document.createElement('br');
+    content.appendChild(document.createElement('br'));
     const txt = document.createElement('span');
     txt.textContent = ping.comment;
-    content.appendChild(br);
     content.appendChild(txt);
   }
 
-  const br2 = document.createElement('br');
+  content.appendChild(document.createElement('br'));
   const del = document.createElement('span');
   del.textContent   = '✕ Supprimer';
   del.style.cssText = 'color:#aaa;font-size:10px;cursor:pointer';
   del.addEventListener('click', () => _pingsRef().doc(id).delete().catch(() => {}));
-  content.appendChild(br2);
   content.appendChild(del);
 
   const infoWindow = new google.maps.InfoWindow({ content });
@@ -403,7 +403,6 @@ function _pingIcon() {
 function _renderTeamPanel(players) {
   const list = document.getElementById('team-list');
   if (!list) return;
-
   while (list.firstChild) list.removeChild(list.firstChild);
 
   const uids = Object.keys(players || {});
@@ -425,19 +424,15 @@ function _renderTeamPanel(players) {
     const statusClass = isOffline ? 'offline' : player.status === 'in_game' ? 'ingame' : 'out';
     const statusLabel = isOffline ? 'HORS LIGNE' : player.status === 'in_game' ? 'EN JEU' : 'OUT';
 
-    const row = document.createElement('div');
+    const row    = document.createElement('div');
     row.className = 'team-player';
-
-    const dot = document.createElement('div');
+    const dot    = document.createElement('div');
     dot.className = `team-player-dot ${dotClass}`;
-
-    const info = document.createElement('div');
+    const info   = document.createElement('div');
     info.className = 'team-player-info';
-
-    const name = document.createElement('div');
+    const name   = document.createElement('div');
     name.className   = 'team-player-name' + (isMe ? ' me' : '');
     name.textContent = player.name;
-
     const status = document.createElement('div');
     status.className   = `team-player-status ${statusClass}`;
     status.textContent = statusLabel;
@@ -455,12 +450,10 @@ function _renderTeamPanel(players) {
 // ══════════════════════════════════════════════════════════
 function _toggleStatus() {
   STATE.status = STATE.status === 'in_game' ? 'out' : 'in_game';
-
   const btn   = document.getElementById('btn-status');
   const label = document.getElementById('status-label');
   btn.className     = 'btn-status ' + (STATE.status === 'in_game' ? 'in-game' : 'out');
   label.textContent = STATE.status === 'in_game' ? 'EN JEU' : 'OUT';
-
   _firestoreUpdateStatus(STATE.status);
   if (STATE.myPosition) _updateMyMarker(STATE.myPosition.lat, STATE.myPosition.lng);
 }
@@ -469,35 +462,45 @@ function _toggleStatus() {
 //  PARTIE
 // ══════════════════════════════════════════════════════════
 async function _createGame() {
+  if (!STATE.uid) { _toast('Connexion Firebase en cours, réessaie...'); return; }
   const pseudo = _sanitizePseudo(document.getElementById('input-pseudo').value.trim());
   if (!pseudo) { _toast('Entre un pseudo valide !'); return; }
 
   STATE.pseudo   = pseudo;
   STATE.gameCode = _generateCode();
 
-  await db.collection('games').doc(STATE.gameCode).set({
-    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    active:    true,
-  });
-
-  await _firestoreJoinGame();
-  _showMap();
-  _toast('Partie créée — CODE: ' + STATE.gameCode);
+  try {
+    await db.collection('games').doc(STATE.gameCode).set({
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      active:    true,
+    });
+    await _firestoreJoinGame();
+    _showMap();
+    _toast('Partie créée — CODE: ' + STATE.gameCode);
+  } catch (err) {
+    console.error('createGame error:', err);
+    _toast('Erreur création partie: ' + err.message);
+  }
 }
 
 async function _joinGame() {
+  if (!STATE.uid) { _toast('Connexion Firebase en cours, réessaie...'); return; }
   const pseudo = _sanitizePseudo(document.getElementById('input-pseudo').value.trim());
   const code   = document.getElementById('input-code').value.trim();
-
   if (!pseudo) { _toast('Entre un pseudo valide !'); return; }
   if (!/^\d{6}$/.test(code)) { _toast('Le code doit être 6 chiffres !'); return; }
 
   STATE.pseudo   = pseudo;
   STATE.gameCode = code;
 
-  await _firestoreJoinGame();
-  _showMap();
-  _toast('Partie rejointe — CODE: ' + STATE.gameCode);
+  try {
+    await _firestoreJoinGame();
+    _showMap();
+    _toast('Partie rejointe — CODE: ' + STATE.gameCode);
+  } catch (err) {
+    console.error('joinGame error:', err);
+    _toast('Erreur: ' + err.message);
+  }
 }
 
 async function _leaveGame() {
@@ -520,6 +523,7 @@ async function _leaveGame() {
 
   STATE.myPosition = null;
   STATE.status     = 'in_game';
+  STATE.gameCode   = '';
 
   const btn = document.getElementById('btn-status');
   const lbl = document.getElementById('status-label');
@@ -553,21 +557,36 @@ function _toast(msg, duration = 2800) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  INIT — Auth anonyme puis événements
+//  INIT
 // ══════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
 
-  // Connexion anonyme Firebase
-  auth.signInAnonymously().then((cred) => {
-    STATE.uid = cred.user.uid;
-  }).catch((err) => {
-    console.error('Auth error:', err);
-    _toast('Erreur de connexion Firebase');
-  });
+  // Désactive les boutons en attendant l'auth Firebase
+  const btnCreate = document.getElementById('btn-create');
+  const btnJoin   = document.getElementById('btn-join');
+  btnCreate.disabled = true;
+  btnJoin.disabled   = true;
+  btnCreate.style.opacity = '0.5';
+  btnJoin.style.opacity   = '0.5';
+
+  // Auth anonyme Firebase
+  auth.signInAnonymously()
+    .then((cred) => {
+      STATE.uid = cred.user.uid;
+      console.log('Firebase Auth OK — UID:', STATE.uid);
+      btnCreate.disabled = false;
+      btnJoin.disabled   = false;
+      btnCreate.style.opacity = '1';
+      btnJoin.style.opacity   = '1';
+    })
+    .catch((err) => {
+      console.error('Auth error:', err);
+      _toast('Erreur Firebase: ' + err.message);
+    });
 
   // Accueil
-  document.getElementById('btn-create').addEventListener('click', _createGame);
-  document.getElementById('btn-join').addEventListener('click', _joinGame);
+  btnCreate.addEventListener('click', _createGame);
+  btnJoin.addEventListener('click', _joinGame);
 
   document.getElementById('input-pseudo').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('input-code').focus();
@@ -613,7 +632,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Dialog ping
   document.getElementById('btn-ping-cancel').addEventListener('click', _closePingDialog);
   document.getElementById('btn-ping-confirm').addEventListener('click', () => {
     _addPing(document.getElementById('input-ping-comment').value.trim());
