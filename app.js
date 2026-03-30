@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════
-   AIRSOFT TRACKER — app.js v2.1
+   AIRSOFT TRACKER — app.js v2.2
    Architecture prête pour Firebase
-   Corrigé : XSS, guards GPS, nettoyage carte, touch events
+   Ping via bouton dédié + clic carte
 ═══════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -19,17 +19,17 @@ const STATE = {
 };
 
 // ── Références carte ────────────────────────────────────────
-let map         = null;
-let markers     = {};
-let pingMarkers = {};
-let myMarker    = null;
-let pingTempPos = null;
-let _toastTimer = null;
+let map           = null;
+let markers       = {};
+let pingMarkers   = {};
+let myMarker      = null;
+let pingTempPos   = null;
+let pingModeActive = false;
+let _toastTimer   = null;
 
 // ══════════════════════════════════════════════════════════
 //  SÉCURITÉ — Échappement
 // ══════════════════════════════════════════════════════════
-
 function _esc(str) {
   if (typeof str !== 'string') return '';
   return str
@@ -42,7 +42,11 @@ function _esc(str) {
 
 function _escSvg(str) {
   if (typeof str !== 'string') return '';
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function _sanitizePseudo(str) {
@@ -54,36 +58,43 @@ function _sanitizePseudo(str) {
 // ══════════════════════════════════════════════════════════
 window.initMap = function () {
   map = new google.maps.Map(document.getElementById('map'), {
-    center:          { lat: 43.7458, lng: 7.1947 },
-    zoom:            16,
-    mapTypeId:       'satellite',
+    center:           { lat: 43.7458, lng: 7.1947 },
+    zoom:             16,
+    mapTypeId:        'satellite',
     disableDefaultUI: true,
-    gestureHandling: 'greedy',
+    gestureHandling:  'greedy',
   });
 
-  // Appui long souris
-  let pressTimer  = null;
-  let pressLatLng = null;
-
-  map.addListener('mousedown', (e) => {
-    pressLatLng = e.latLng || null;
-    pressTimer  = setTimeout(() => { if (pressLatLng) _openPingDialog(pressLatLng); }, 650);
+  // Clic sur la carte — pose un ping si mode actif
+  map.addListener('click', (e) => {
+    if (pingModeActive && e.latLng) {
+      _openPingDialog(e.latLng);
+      _setPingMode(false);
+    }
   });
-  map.addListener('mouseup',      () => clearTimeout(pressTimer));
-  map.addListener('dragstart',    () => clearTimeout(pressTimer));
-  map.addListener('zoom_changed', () => clearTimeout(pressTimer));
-
-  // Appui long touch
-  let touchTimer  = null;
-  let touchLatLng = null;
-
-  map.addListener('touchstart', (e) => {
-    touchLatLng = e.latLng || null;
-    touchTimer  = setTimeout(() => { if (touchLatLng) _openPingDialog(touchLatLng); }, 650);
-  });
-  map.addListener('touchend',  () => clearTimeout(touchTimer));
-  map.addListener('touchmove', () => clearTimeout(touchTimer));
 };
+
+// ══════════════════════════════════════════════════════════
+//  MODE PING
+// ══════════════════════════════════════════════════════════
+function _setPingMode(active) {
+  pingModeActive = active;
+  const btn    = document.getElementById('btn-ping-mode');
+  const mapDiv = document.getElementById('map');
+
+  if (active) {
+    btn.classList.add('active');
+    btn.style.borderColor = '#f39c12';
+    btn.style.color       = '#f39c12';
+    if (mapDiv) mapDiv.style.cursor = 'crosshair';
+    _toast('Tape sur la carte pour poser un ping', 3500);
+  } else {
+    btn.classList.remove('active');
+    btn.style.borderColor = '';
+    btn.style.color       = '';
+    if (mapDiv) mapDiv.style.cursor = '';
+  }
+}
 
 // ══════════════════════════════════════════════════════════
 //  NAVIGATION
@@ -96,9 +107,9 @@ function _showScreen(id) {
 
 function _showMap() {
   _showScreen('screen-map');
-  document.getElementById('hud-pseudo').textContent  = STATE.pseudo;
-  document.getElementById('hud-code').textContent    = 'CODE: ' + STATE.gameCode;
-  document.getElementById('panel-code').textContent  = STATE.gameCode;
+  document.getElementById('hud-pseudo').textContent = STATE.pseudo;
+  document.getElementById('hud-code').textContent   = 'CODE: ' + STATE.gameCode;
+  document.getElementById('panel-code').textContent = STATE.gameCode;
   _startGPS();
   _renderTeamPanel();
 }
@@ -127,7 +138,11 @@ function _startGPS() {
       // TODO Firebase: update position in Firestore
     },
     (err) => {
-      const msgs = { 1: 'Permission GPS refusée', 2: 'Position indisponible', 3: 'Timeout GPS' };
+      const msgs = {
+        1: 'Permission GPS refusée — active la localisation',
+        2: 'Position GPS indisponible',
+        3: 'Timeout GPS — réessaie',
+      };
       _toast(msgs[err.code] || 'Erreur GPS');
     },
     { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
@@ -165,11 +180,12 @@ function _refreshPlayerMarkers() {
   Object.entries(STATE.players).forEach(([uid, player]) => {
     if (uid === STATE.uid || !player.lat || !player.lng || player.lat === 0) return;
     const isOffline = Date.now() - player.updatedAt > 60000;
-    const color = isOffline ? '#555e55' : player.status === 'in_game' ? '#3498db' : '#e74c3c';
+    const color = isOffline ? '#555e55'
+      : player.status === 'in_game' ? '#3498db' : '#e74c3c';
     markers[uid] = new google.maps.Marker({
       position: { lat: player.lat, lng: player.lng },
       map,
-      icon: _markerIcon(color, player.name),
+      icon:  _markerIcon(color, player.name),
       title: player.name,
     });
   });
@@ -229,8 +245,6 @@ function _addPing(comment) {
 
 function _renderPingMarker(id, ping) {
   if (!map) return;
-  const safeName    = _esc(ping.playerName);
-  const safeComment = ping.comment; // déjà échappé dans _addPing
 
   const content = document.createElement('div');
   content.style.cssText = 'font-family:monospace;font-size:12px;color:#222;padding:4px;max-width:200px';
@@ -249,7 +263,7 @@ function _renderPingMarker(id, ping) {
 
   const br2 = document.createElement('br');
   const del = document.createElement('span');
-  del.textContent = '✕ Supprimer';
+  del.textContent   = '✕ Supprimer';
   del.style.cssText = 'color:#aaa;font-size:10px;cursor:pointer';
   del.addEventListener('click', () => _removePing(id));
   content.appendChild(br2);
@@ -310,7 +324,7 @@ function _renderTeamPanel() {
   if (uids.length === 0) {
     const empty = document.createElement('div');
     empty.style.cssText = 'padding:16px;color:var(--text-dim);font-size:11px;text-align:center';
-    empty.textContent = 'Aucun joueur';
+    empty.textContent   = 'Aucun joueur';
     list.appendChild(empty);
     return;
   }
@@ -324,7 +338,7 @@ function _renderTeamPanel() {
     const statusClass = isOffline ? 'offline' : player.status === 'in_game' ? 'ingame' : 'out';
     const statusLabel = isOffline ? 'HORS LIGNE' : player.status === 'in_game' ? 'EN JEU' : 'OUT';
 
-    const row    = document.createElement('div');
+    const row = document.createElement('div');
     row.className = 'team-player';
 
     const dot = document.createElement('div');
@@ -334,11 +348,11 @@ function _renderTeamPanel() {
     info.className = 'team-player-info';
 
     const name = document.createElement('div');
-    name.className = 'team-player-name' + (isMe ? ' me' : '');
-    name.textContent = player.name; // textContent = sécurisé
+    name.className   = 'team-player-name' + (isMe ? ' me' : '');
+    name.textContent = player.name;
 
     const status = document.createElement('div');
-    status.className = `team-player-status ${statusClass}`;
+    status.className   = `team-player-status ${statusClass}`;
     status.textContent = statusLabel;
 
     info.appendChild(name);
@@ -398,15 +412,16 @@ function _joinGame() {
 function _joinGameState() {
   STATE.status = 'in_game';
   STATE.players[STATE.uid] = {
-    name: STATE.pseudo, status: 'in_game', lat: 0, lng: 0, updatedAt: Date.now(),
+    name: STATE.pseudo, status: 'in_game',
+    lat: 0, lng: 0, updatedAt: Date.now(),
   };
   _showMap();
 }
 
 function _leaveGame() {
   _stopGPS();
+  _setPingMode(false);
 
-  // Nettoyage propre de la carte
   if (myMarker) { myMarker.setMap(null); myMarker = null; }
   Object.values(markers).forEach(m => m.setMap(null));
   markers = {};
@@ -416,17 +431,15 @@ function _leaveGame() {
   });
   pingMarkers = {};
 
-  // Réinitialise l'état
   STATE.players    = {};
   STATE.pings      = {};
   STATE.myPosition = null;
   STATE.status     = 'in_game';
 
-  // Remet le bouton statut
   const btn = document.getElementById('btn-status');
   const lbl = document.getElementById('status-label');
-  if (btn) btn.className    = 'btn-status in-game';
-  if (lbl) lbl.textContent  = 'EN JEU';
+  if (btn) btn.className   = 'btn-status in-game';
+  if (lbl) lbl.textContent = 'EN JEU';
 
   document.getElementById('panel-team')?.classList.add('hidden');
   document.getElementById('btn-team')?.classList.remove('active');
@@ -465,6 +478,7 @@ function _toast(msg, duration = 2800) {
 document.addEventListener('DOMContentLoaded', () => {
   STATE.uid = _generateUID();
 
+  // Accueil
   document.getElementById('btn-create').addEventListener('click', _createGame);
   document.getElementById('btn-join').addEventListener('click', _joinGame);
 
@@ -478,6 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
     e.target.value = e.target.value.replace(/\D/g, '').substring(0, 6);
   });
 
+  // Carte
   document.getElementById('btn-back').addEventListener('click', _leaveGame);
   document.getElementById('btn-status').addEventListener('click', _toggleStatus);
 
@@ -507,6 +522,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Bouton mode ping
+  document.getElementById('btn-ping-mode').addEventListener('click', () => {
+    _setPingMode(!pingModeActive);
+  });
+
+  // Dialog ping
   document.getElementById('btn-ping-cancel').addEventListener('click', _closePingDialog);
   document.getElementById('btn-ping-confirm').addEventListener('click', () => {
     _addPing(document.getElementById('input-ping-comment').value.trim());
